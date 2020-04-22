@@ -4,6 +4,7 @@
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
+ *
  */
 
 / {
@@ -68,6 +69,20 @@
 &am33xx_pinmux {
 	pinctrl-names = "default";
 	pinctrl-0 = <&clkout2_pin>;
+
+	dcan0_pins: pinmux_dcan0_pins {
+		pinctrl-single,pins = <
+			AM33XX_IOPAD(0x97c, PIN_INPUT  | MUX_MODE2) /* (D17) uart1_rtsn.dcan0_rx */
+			AM33XX_IOPAD(0x978, PIN_OUTPUT | MUX_MODE2) /* (D18) uart1_ctsn.dcan0_tx */
+		>;
+	};
+
+	dcan1_pins: pinmux_dcan1_pins {
+		pinctrl-single,pins = <
+			AM33XX_IOPAD(0x984, PIN_INPUT  | MUX_MODE2) /* (D15) uart1_txd.dcan1_rx */
+			AM33XX_IOPAD(0x980, PIN_OUTPUT | MUX_MODE2) /* (D16) uart1_rxd.dcan1_tx */
+		>;
+	};
 
 	user_leds_s0: user_leds_s0 {
 		pinctrl-single,pins = <
@@ -186,21 +201,6 @@
 			AM33XX_IOPAD(0x81c, PIN_INPUT_PULLUP | MUX_MODE1) /* gpmc_ad7.mmc1_dat7 */
 		>;
 	};
-   
-   dcan0_pins: pinmux_dcan0_pins {
-		pinctrl-single,pins = <
-			AM33XX_IOPAD(0x97c, PIN_INPUT  | MUX_MODE2) /* (D17) uart1_rtsn.dcan0_rx */
-			AM33XX_IOPAD(0x978, PIN_OUTPUT | MUX_MODE2) /* (D18) uart1_ctsn.dcan0_tx */
-		>;
-	};
-
-   dcan1_pins: pinmux_dcan1_pins {
-		pinctrl-single,pins = <
-			AM33XX_IOPAD(0x984, PIN_INPUT  | MUX_MODE2) /* (D15) uart1_txd.dcan1_rx */
-			AM33XX_IOPAD(0x980, PIN_OUTPUT | MUX_MODE2) /* (D16) uart1_rxd.dcan1_tx */
-		>;
-	};
-   
 };
 
 &uart0 {
