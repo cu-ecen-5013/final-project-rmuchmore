@@ -1,0 +1,5 @@
+
+config BR2_PACKAGE_AESD_FINAL
+	bool "aesd-final"
+	help
+	  Includes the package for the final project
