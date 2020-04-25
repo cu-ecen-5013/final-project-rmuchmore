@@ -133,6 +133,8 @@ clean:
 post-build:
 	-@echo 'Performing post-build steps'
 	-@echo ' '
+	cp ./vehicle/vehicle ../../../rootfs_overlay_beaglebone/usr/bin
+	cp ./scan_tool/scan_tool ../../../rootfs_overlay_beaglebone/usr/bin
 
 .PHONY: all clean dependents post-build
 
