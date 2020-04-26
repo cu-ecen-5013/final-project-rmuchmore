@@ -1,7 +1,8 @@
 /*
-* File: server_socket.c
+* File: vehicle.c
 *
-* Description: Create a server socket to accept client connections
+* Description: Create a server socket to provide vehicle data.
+*              Simulates a vehicle ECU
 *
 * Author: Royce Muchmore
 *
@@ -39,6 +40,16 @@
 #include <sys/types.h>
 
 // File defines and typedefs
+typedef struct obd2_message
+{
+   uint32_t id;
+   uint8_t  num_bytes;
+   uint8_t  mode;
+   uint8_t  pid;
+   uint8_t  data[ 4 ];
+   uint8_t  unused;
+} obd2_message;
+
 #define M_ARRAY_SIZE( x ) ( sizeof(x) / sizeof(x[0]) )
 #define SYSLOG_BUF_SIZE 80
 #define MAX_CLIENT_CONNECTIONS 1
@@ -48,13 +59,20 @@
 
 // File data and functions
 static bool g_stop_signal = false;
-static char client_log_file[] = "/var/tmp/aesdsocketdata";
+static char client_log_file[] = "/var/tmp/aesdvehicle";
 static uint8_t client_buffer[ 2* MAX_CLIENT_CONNECTIONS ][ CLIENT_LOG_BUF_SIZE ];
+
+static uint32_t vehicle_id   = 0x000007EF;
+static uint32_t scan_tool_id = 0x000007DF;
 
 static int run_daemon( void );
 static int create_socket( int *socket_fd );
 static int run_server( int socket_fd );
 static void transfer_data( int client_socket_fd );
+
+static void handle_obd2_request( int client_socket_fd, obd2_message* obd2_request );
+static void send_obd2_response( int client_socket_fd, obd2_message* obd2_response );
+static void handle_obd2_engine_rpm( obd2_message* obd2_msg );
 
 static int setup_signals( void );
 static void signal_handler( int signal );
@@ -329,6 +347,8 @@ void transfer_data( int client_socket_fd )
    int tx_bytes;
    int tx_length;
    struct stat file_stat;
+   obd2_message obd2_msg;
+   size_t msg_bytes;
    char *start_packet;
    char *end_packet;
    char error[ SYSLOG_BUF_SIZE + 1 ];
@@ -345,6 +365,8 @@ void transfer_data( int client_socket_fd )
       O_NONBLOCK
       );
    
+   msg_bytes = sizeof ( obd2_msg );
+   
    for(;;)
    {
       rx_bytes = recv(
@@ -353,71 +375,28 @@ void transfer_data( int client_socket_fd )
          CLIENT_LOG_BUF_SIZE, 
          0
          );
-         
-      if ( rx_bytes > 0 )
+
+      // Write received data to the end of the file
+      tx_bytes = write(
+         client_log_file_fd,
+         client_buffer,
+         msg_bytes
+         );
+
+      // Assume data is received in the size of message,
+      // this corresponds to a CAN frame.         
+      if ( rx_bytes == msg_bytes )
       {
-         start_packet = (char *) client_buffer[ 0 ];
-         do
-         {
-            end_packet = strchr( start_packet, '\n' );            
-            if ( end_packet != NULL )
-            {
-               tx_length = end_packet - start_packet + 1;
-               
-               while ( tx_length )
-               {
-                  // Write received data to the end of the file
-                  tx_bytes = write(
-                     client_log_file_fd,
-                     start_packet,
-                     tx_length
-                     );
-                     
-                  if ( -1 == tx_bytes )
-                  {
-                     // File write errror occurred
-                     strerror_r( errno, error, SYSLOG_BUF_SIZE );
-                     syslog( LOG_ERR, "%s: %s", __func__, error );
-                     break;
-                  }
-                  else
-                  {
-                     tx_length -= tx_bytes;
-                  }
-               } 
-                              
-               // Send the entire file 
-               fstat( client_log_file_fd, &file_stat ); 
-               tx_length = file_stat.st_size;                 
-               //printf( "Files size: %d\n", tx_length );                              
-               lseek( client_log_file_fd, 0, SEEK_SET );
-               while ( tx_length )
-               {
-                  tx_bytes = sendfile(
-                     client_socket_fd,
-                     client_log_file_fd,
-                     NULL,
-                     tx_length
-                     );
-                     
-                  if ( -1 == tx_bytes )
-                  {
-                     // Socket errror occurred
-                     strerror_r( errno, error, SYSLOG_BUF_SIZE );
-                     syslog( LOG_ERR, "%s: %s", __func__, error );
-                     break;
-                  }
-                  else
-                  {
-                     tx_length -= tx_bytes;
-                  }
-               }
-               lseek( client_log_file_fd, 0, SEEK_END );
-               start_packet = end_packet + 1;
-            }
-            
-         } while ( end_packet != NULL );
+         memcpy( &obd2_msg, client_buffer, msg_bytes );
          
+         if ( -1 == tx_bytes )
+         {
+            // File write errror occurred
+            strerror_r( errno, error, SYSLOG_BUF_SIZE );
+            syslog( LOG_ERR, "%s: %s", __func__, error );
+         }
+         
+         handle_obd2_request( client_socket_fd, &obd2_msg );
       }
       else if ( -1 == rx_bytes )
       {
@@ -446,6 +425,151 @@ void transfer_data( int client_socket_fd )
        
    close( client_log_file_fd );
     
+   return;
+}
+
+#define MODE_SHOW_CURRENT_DATA      1
+#define MODE_REQUEST_VEHICLE_INFO   9
+
+#define PID_ENGINE_RPM             12
+#define PID_VEHICLE_SPEED          13
+#define PID_AMBIENT_AIR_TEMP       70
+#define PID_ODOMETER              166
+
+/*
+* Name: handle_obd2_request
+*
+* Description: Handle OBD2 messages.
+*              Send response to supported message
+*
+* Inputs: obd2_request - obd2 message to process
+* *
+* Returns: None
+*
+*/
+void handle_obd2_request( int client_socket_fd, obd2_message* obd2_request )
+{
+   obd2_message obd2_response = { 0 };
+
+   obd2_response.id = vehicle_id;
+   
+   if ( obd2_request != NULL )
+   {
+      //printf( "Received OBD2 Request: %lu\n",  obd2_request->id );
+   
+      // Filter message ids
+      if ( obd2_request->id == scan_tool_id )
+      {
+         //printf( "Received Scan Tool Request\n" );
+         switch( obd2_request->mode )
+         {
+            case MODE_SHOW_CURRENT_DATA:
+            {
+               //printf( "Mode: Current Data\n" );
+               switch( obd2_request->pid )
+               {
+                  case PID_ENGINE_RPM:
+                  {
+                     printf( "Received RPM Request\n" );
+                     handle_obd2_engine_rpm( &obd2_response );
+                     obd2_response.pid = obd2_request->pid | 0x40;
+                     send_obd2_response( client_socket_fd, &obd2_response );
+                     break;
+                  }
+                  
+                  default:
+                  {
+                     break;
+                  }
+               }
+               break;
+            }
+            
+            default:
+            {
+               break;
+            }
+         }
+      }
+   }
+   return;
+}
+
+
+/*
+* Name: send_obd2_response
+*
+* Description: Send an OBD2 response
+*
+* Inputs: obd2_response
+* *
+* Returns: None
+*
+*/
+void send_obd2_response( int client_socket_fd, obd2_message* obd2_response )
+{
+   size_t tx_length = sizeof( obd2_message );
+   size_t tx_bytes;
+   char error[ SYSLOG_BUF_SIZE + 1 ];
+
+    
+   if ( obd2_response != NULL )
+   {
+      while ( tx_length )
+      {
+         tx_bytes = send(
+            client_socket_fd,
+            obd2_response,
+            tx_length,
+            0
+            );
+
+         if ( -1 == tx_bytes )
+         {
+            // Socket errror occurred
+            strerror_r( errno, error, SYSLOG_BUF_SIZE );
+            syslog( LOG_ERR, "%s: %s", __func__, error );
+            break;
+         }
+         else
+         {
+            tx_length -= tx_bytes;
+         }
+      }
+   }
+   return;
+}
+
+
+/*
+* Name: handle_obd2_engine_rpm
+*
+* Description: Add the RPM data to the input message
+*
+* Inputs: obd2_msg
+* 
+* Returns: None
+*
+*/
+void handle_obd2_engine_rpm( obd2_message* obd2_msg )
+{
+   static uint32_t rpm = 1000;
+   int i = 0;
+   
+   if ( obd2_msg != NULL )
+   {
+      obd2_msg->num_bytes = 2;
+      obd2_msg->data[ i++ ] = (uint8_t) (((rpm * 4) & 0xFF00) >> 8 );
+      obd2_msg->data[ i++ ] = (uint8_t)  ((rpm * 4) & 0x00FF);
+      obd2_msg->data[ i++ ] = 0;
+      obd2_msg->data[ i++ ] = 0;
+
+      rpm += 100;
+      if ( rpm > 10000 )
+      {
+         rpm = 1000;
+      }
+   }   
    return;
 }
 
