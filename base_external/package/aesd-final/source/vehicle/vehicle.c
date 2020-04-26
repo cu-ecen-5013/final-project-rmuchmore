@@ -40,6 +40,23 @@
 #include <sys/types.h>
 
 // File defines and typedefs
+#define M_ARRAY_SIZE( x ) ( sizeof(x) / sizeof(x[0]) )
+#define SYSLOG_BUF_SIZE 80
+#define MAX_CLIENT_CONNECTIONS 1
+#define CLIENT_LOG_BUF_SIZE 4096
+#define SERVER_PORT_STRING "9000" 
+#define SERVER_PORT 9000
+
+#define MODE_SHOW_CURRENT_DATA      1
+#define MODE_REQUEST_VEHICLE_INFO   9
+
+#define MODE_RESPONSE            0x40
+
+#define PID_ENGINE_RPM             12
+#define PID_VEHICLE_SPEED          13
+#define PID_AMBIENT_AIR_TEMP       70
+#define PID_ODOMETER              166
+
 typedef struct obd2_message
 {
    uint32_t id;
@@ -50,12 +67,6 @@ typedef struct obd2_message
    uint8_t  unused;
 } obd2_message;
 
-#define M_ARRAY_SIZE( x ) ( sizeof(x) / sizeof(x[0]) )
-#define SYSLOG_BUF_SIZE 80
-#define MAX_CLIENT_CONNECTIONS 1
-#define CLIENT_LOG_BUF_SIZE 4096
-#define SERVER_PORT_STRING "9000" 
-#define SERVER_PORT 9000
 
 // File data and functions
 static bool g_stop_signal = false;
@@ -73,9 +84,13 @@ static void transfer_data( int client_socket_fd );
 static void handle_obd2_request( int client_socket_fd, obd2_message* obd2_request );
 static void send_obd2_response( int client_socket_fd, obd2_message* obd2_response );
 static void handle_obd2_engine_rpm( obd2_message* obd2_msg );
+static void handle_obd2_vehicle_speed( obd2_message* obd2_msg );
+static void handle_obd2_ambient_air_temp( obd2_message* obd2_msg );
+static void handle_obd2_odometer( obd2_message* obd2_msg );
 
 static int setup_signals( void );
 static void signal_handler( int signal );
+
 
 /*
 * Name: main
@@ -134,6 +149,7 @@ int main( int argc, char *argv[] )
    return( return_status );
 }
 
+
 /*
 * Name: run_daemon
 *
@@ -163,6 +179,7 @@ int run_daemon( void )
    
    return( return_status );
 }
+
 
 /*
 * Name: create_socket
@@ -248,6 +265,7 @@ int create_socket( int *socket_fd )
    return( return_status );
 }
 
+
 /*
 * Name: run_server
 *
@@ -330,6 +348,7 @@ int run_server( int socket_fd )
    return( return_status );
 }
 
+
 /*
 * Name: transfer_data
 *
@@ -365,7 +384,7 @@ void transfer_data( int client_socket_fd )
       O_NONBLOCK
       );
    
-   msg_bytes = sizeof ( obd2_msg );
+   msg_bytes = sizeof ( obd2_message );
    
    for(;;)
    {
@@ -376,18 +395,34 @@ void transfer_data( int client_socket_fd )
          0
          );
 
-      // Write received data to the end of the file
-      tx_bytes = write(
-         client_log_file_fd,
-         client_buffer,
-         msg_bytes
-         );
-
-      // Assume data is received in the size of message,
+      // Assume data is received in the size of a message,
       // this corresponds to a CAN frame.         
       if ( rx_bytes == msg_bytes )
       {
-         memcpy( &obd2_msg, client_buffer, msg_bytes );
+         // Write received data to the end of the file
+         //tx_bytes = write(
+         //   client_log_file_fd,
+         //   client_buffer[ 0 ],
+         //   msg_bytes
+         //   );
+
+         printf( 
+            "RX: %02hhX %02hhX %02hhX %02hhX %02hhX %02hhX "
+                "%02hhX %02hhX %02hhX %02hhX %02hhX %02hhX\n",
+            client_buffer[ 0 ][  0 ],
+            client_buffer[ 0 ][  1 ],
+            client_buffer[ 0 ][  2 ],
+            client_buffer[ 0 ][  3 ],
+            client_buffer[ 0 ][  4 ],
+            client_buffer[ 0 ][  5 ],
+            client_buffer[ 0 ][  6 ],
+            client_buffer[ 0 ][  7 ],
+            client_buffer[ 0 ][  8 ],
+            client_buffer[ 0 ][  9 ],
+            client_buffer[ 0 ][ 10 ],
+            client_buffer[ 0 ][ 11 ]
+            );
+         memcpy( &obd2_msg, client_buffer[ 0 ], msg_bytes );
          
          if ( -1 == tx_bytes )
          {
@@ -428,13 +463,6 @@ void transfer_data( int client_socket_fd )
    return;
 }
 
-#define MODE_SHOW_CURRENT_DATA      1
-#define MODE_REQUEST_VEHICLE_INFO   9
-
-#define PID_ENGINE_RPM             12
-#define PID_VEHICLE_SPEED          13
-#define PID_AMBIENT_AIR_TEMP       70
-#define PID_ODOMETER              166
 
 /*
 * Name: handle_obd2_request
@@ -443,7 +471,7 @@ void transfer_data( int client_socket_fd )
 *              Send response to supported message
 *
 * Inputs: obd2_request - obd2 message to process
-* *
+*
 * Returns: None
 *
 */
@@ -455,12 +483,13 @@ void handle_obd2_request( int client_socket_fd, obd2_message* obd2_request )
    
    if ( obd2_request != NULL )
    {
-      //printf( "Received OBD2 Request: %lu\n",  obd2_request->id );
+      //printf( "Received OBD2 Request: %u\n",  obd2_request->id );
    
       // Filter message ids
       if ( obd2_request->id == scan_tool_id )
       {
-         //printf( "Received Scan Tool Request\n" );
+         //printf( "Received Scan Tool Request\n" );         
+         obd2_response.mode = obd2_request->mode | MODE_RESPONSE;
          switch( obd2_request->mode )
          {
             case MODE_SHOW_CURRENT_DATA:
@@ -470,9 +499,32 @@ void handle_obd2_request( int client_socket_fd, obd2_message* obd2_request )
                {
                   case PID_ENGINE_RPM:
                   {
-                     printf( "Received RPM Request\n" );
+                     //printf( "Received RPM Request\n" );
                      handle_obd2_engine_rpm( &obd2_response );
-                     obd2_response.pid = obd2_request->pid | 0x40;
+                     send_obd2_response( client_socket_fd, &obd2_response );
+                     break;
+                  }
+
+                  case PID_VEHICLE_SPEED:
+                  {
+                     //printf( "Received Speed Request\n" );
+                     handle_obd2_vehicle_speed( &obd2_response );
+                     send_obd2_response( client_socket_fd, &obd2_response );
+                     break;
+                  }
+                  
+                  case PID_AMBIENT_AIR_TEMP:
+                  {
+                     //printf( "Received Ambient Air Temp Request\n" );
+                     handle_obd2_ambient_air_temp( &obd2_response );
+                     send_obd2_response( client_socket_fd, &obd2_response );
+                     break;
+                  }
+
+                  case PID_ODOMETER:
+                  {
+                     //printf( "Received Odometer Request\n" );
+                     handle_obd2_odometer( &obd2_response );
                      send_obd2_response( client_socket_fd, &obd2_response );
                      break;
                   }
@@ -502,7 +554,7 @@ void handle_obd2_request( int client_socket_fd, obd2_message* obd2_request )
 * Description: Send an OBD2 response
 *
 * Inputs: obd2_response
-* *
+*
 * Returns: None
 *
 */
@@ -544,7 +596,7 @@ void send_obd2_response( int client_socket_fd, obd2_message* obd2_response )
 /*
 * Name: handle_obd2_engine_rpm
 *
-* Description: Add the RPM data to the input message
+* Description: Insert the RPM data into the message
 *
 * Inputs: obd2_msg
 * 
@@ -558,7 +610,8 @@ void handle_obd2_engine_rpm( obd2_message* obd2_msg )
    
    if ( obd2_msg != NULL )
    {
-      obd2_msg->num_bytes = 2;
+      obd2_msg->num_bytes = 4;
+      obd2_msg->pid = PID_ENGINE_RPM;
       obd2_msg->data[ i++ ] = (uint8_t) (((rpm * 4) & 0xFF00) >> 8 );
       obd2_msg->data[ i++ ] = (uint8_t)  ((rpm * 4) & 0x00FF);
       obd2_msg->data[ i++ ] = 0;
@@ -575,6 +628,111 @@ void handle_obd2_engine_rpm( obd2_message* obd2_msg )
 
 
 /*
+* Name: handle_obd2_vehicle_speed
+*
+* Description: Insert the vehicle speed data into the message
+*
+* Inputs: obd2_msg
+* 
+* Returns: None
+*
+*/
+void handle_obd2_vehicle_speed( obd2_message* obd2_msg )
+{
+   static uint32_t speed = 10;
+   int i = 0;
+   
+   if ( obd2_msg != NULL )
+   {
+      // Speed in km/h
+      obd2_msg->num_bytes = 3;
+      obd2_msg->pid = PID_VEHICLE_SPEED;
+      obd2_msg->data[ i++ ] = (uint8_t) speed;
+      obd2_msg->data[ i++ ] = 0;
+      obd2_msg->data[ i++ ] = 0;
+      obd2_msg->data[ i++ ] = 0;
+
+      speed += 10;
+      if ( speed > 200 )
+      {
+         speed = 10;
+      }
+   }   
+   return;
+}
+
+
+/*
+* Name: handle_obd2_ambient_air_temp
+*
+* Description: Insert the ambient air temperature data into the message
+*
+* Inputs: obd2_msg
+* 
+* Returns: None
+*
+*/
+void handle_obd2_ambient_air_temp( obd2_message* obd2_msg )
+{
+   static int32_t temperature = -40;
+   int i = 0;
+   
+   if ( obd2_msg != NULL )
+   {
+      // Temperature scaled by 40 C
+      obd2_msg->num_bytes = 3;
+      obd2_msg->pid = PID_AMBIENT_AIR_TEMP;
+      obd2_msg->data[ i++ ] = (uint8_t) ( temperature + 40 );
+      obd2_msg->data[ i++ ] = 0;
+      obd2_msg->data[ i++ ] = 0;
+      obd2_msg->data[ i++ ] = 0;
+
+      temperature += 5;
+      if ( temperature > 200 )
+      {
+         temperature = -40;
+      }
+   }   
+   return;
+}
+
+
+/*
+* Name: handle_obd2_odometer
+*
+* Description: Insert the RPM data into the message
+*
+* Inputs: obd2_msg
+* 
+* Returns: None
+*
+*/
+void handle_obd2_odometer( obd2_message* obd2_msg )
+{
+   static uint32_t odometer = 10000;
+   int i = 0;
+   
+   if ( obd2_msg != NULL )
+   {
+      // Odometer in km
+      obd2_msg->num_bytes = 6;
+      obd2_msg->pid = PID_ODOMETER;
+      obd2_msg->data[ i++ ] = (uint8_t) (((odometer * 10) & 0xFF000000) >> 24 );
+      obd2_msg->data[ i++ ] = (uint8_t) (((odometer * 10) & 0x00FF0000) >> 16 );
+      obd2_msg->data[ i++ ] = (uint8_t) (((odometer * 10) & 0x0000FF00) >>  8 );
+      obd2_msg->data[ i++ ] = (uint8_t)  ((odometer * 10) & 0x000000FF);
+
+      odometer += 1000;
+      if ( odometer > 1000000 )
+      {
+         odometer = 10000;
+      }
+   }   
+   return;
+}
+
+
+/*
 * Name: setup_signals
 *
 * Description: Setup signal handlers for:
@@ -582,7 +740,7 @@ void handle_obd2_engine_rpm( obd2_message* obd2_msg )
 *                SIGTERM
 *
 * Inputs: None
-* *
+*
 * Returns: EXIT_SUCCESS - signal handlers configured
 *          EXIT_FAILURE - failed to setup signal handlers
 *
@@ -615,6 +773,7 @@ int setup_signals( void )
    return( return_status );
 }
 
+
 /*
 * Name: signal_handler
 *
@@ -625,7 +784,7 @@ int setup_signals( void )
 *                    must be reentrant.
 *
 * Inputs: None
-* *
+*
 * Returns: None
 *
 */
