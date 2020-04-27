@@ -116,6 +116,7 @@ $(MY_VEHICLE_TARGET): $(MY_VEHICLE_OBJS)
 	$(MY_LD) $(MY_LD_OPTS)  -o "$(MY_VEHICLE_TARGET)" $(MY_VEHICLE_OBJS) $(MY_VEHICLE_LIBS)
 	@echo 'Finished building target: $@'
 	@echo ' '
+	cp ./vehicle/vehicle ../../../../base_external/rootfs_overlay_beaglebone/usr/bin
 
 $(MY_SCAN_TOOL_TARGET): $(MY_SCAN_TOOL_OBJS)
 	@echo 'Building target: $@'
@@ -123,6 +124,7 @@ $(MY_SCAN_TOOL_TARGET): $(MY_SCAN_TOOL_OBJS)
 	$(MY_LD) $(MY_LD_OPTS)  -o "$(MY_SCAN_TOOL_TARGET)" $(MY_SCAN_TOOL_OBJS) $(MY_SCAN_TOOL_LIBS)
 	@echo 'Finished building target: $@'
 	@echo ' '
+	cp ./scan_tool/scan_tool ../../../../base_external/rootfs_overlay_beaglebone/usr/bin
 
 # Other Targets
 clean:
@@ -133,8 +135,6 @@ clean:
 post-build:
 	-@echo 'Performing post-build steps'
 	-@echo ' '
-	cp ./vehicle/vehicle ../../../rootfs_overlay_beaglebone/usr/bin
-	cp ./scan_tool/scan_tool ../../../rootfs_overlay_beaglebone/usr/bin
 
 .PHONY: all clean dependents post-build
 
